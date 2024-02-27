@@ -46,23 +46,22 @@ func (c *Coordinator) AssignTask(args *Args, reply *Reply) error {
 	fmt.Println("We are in Assign Task Call")
 	for _, mapTask := range(c.mapTasks) {
 		if mapTask.state == IDLE {
-			reply.MTask = mapTask
+			// reply.MTask = mapTask
 			reply.TaskType = MAP
 			fmt.Println("Hey")
 			return nil
 		}
 	}
 
-	for _, reduceTask := range(c.reduceTasks) {
-		if reduceTask.state == IDLE {
-			reply.RTask = reduceTask
-			reply.TaskType = REDUCE
-			return nil
-		}
-	}
+	// for _, reduceTask := range(c.reduceTasks) {
+	// 	if reduceTask.state == IDLE {
+	// 		reply.RTask = reduceTask
+	// 		reply.TaskType = REDUCE
+	// 		return nil
+	// 	}
+	// }
 
-	reply.TaskType = NO_JOB
-	reply.TaskType = args.Type + 1
+	reply.TaskType = args.Type
 	return nil
 }
 func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {

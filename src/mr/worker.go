@@ -24,7 +24,15 @@ func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 		fmt.Println("We are in Worker")
 
-		CallAssignTask()
+		reply, err := CallAssignTask()
+
+		if err != nil {
+			fmt.Println("RPC Failed.")
+		}
+
+		if reply.TaskType == MAP {
+			fmt.Println("You are okay, do the rest later")
+		}
 		// if reply.TaskType == MAP {
 		// 	fmt.Println("till now we are okay")
 		// }
@@ -37,21 +45,21 @@ func Worker(mapf func(string, string) []KeyValue,
 
 }
 
-func CallAssignTask() {
+func CallAssignTask() (Reply, error) {
 
 	args := Args{}
 	reply := Reply{}
 
-	args.Type = NO_JOB
-
-	fmt.Println("Hippo")
+	args.Type = MAP
 
 	ok := call("Coordinator.AssignTask", &args, &reply)
 
 	if ok {
 		fmt.Println("This worker called OK and task type is", reply.TaskType)
+		return reply, nil
 	} else {
 		fmt.Println("Call failed.")
+		return reply, rpc.ErrShutdown
 	}
 }
 

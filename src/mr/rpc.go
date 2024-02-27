@@ -19,6 +19,8 @@ type Args struct {
 }
 
 type Reply struct {
+	// MTask MapTask
+	// RTask ReduceTask
 	TaskType int
 }
 
