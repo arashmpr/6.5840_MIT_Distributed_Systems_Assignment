@@ -64,10 +64,6 @@ func (c *Coordinator) AssignTask(args *Args, reply *Reply) error {
 	reply.TaskType = args.Type
 	return nil
 }
-func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
-	reply.Y = args.X + 1
-	return nil
-}
 
 // start a thread that listens for RPCs from worker.go
 func (c *Coordinator) server() {

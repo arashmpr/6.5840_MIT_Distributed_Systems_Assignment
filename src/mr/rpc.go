@@ -24,14 +24,6 @@ type Reply struct {
 	TaskType int
 }
 
-type ExampleArgs struct {
-	X int
-}
-
-type ExampleReply struct {
-	Y int
-}
-
 // Add your RPC definitions here.
 
 
