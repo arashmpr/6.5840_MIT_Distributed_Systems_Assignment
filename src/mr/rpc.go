@@ -14,14 +14,15 @@ import "strconv"
 // and reply for an RPC.
 //
 
-type Args struct {
-	Type int
+type RPCRequest struct {
+	
 }
 
-type Reply struct {
-	// MTask MapTask
-	// RTask ReduceTask
-	TaskType int
+type RPCResponse struct {
+	WorkerID	int
+	TaskType	int
+	TaskInfo	string
+	MapStatus	int
 }
 
 // Add your RPC definitions here.

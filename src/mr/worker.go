@@ -4,6 +4,7 @@ import "fmt"
 import "log"
 import "net/rpc"
 import "hash/fnv"
+import "time"
 
 // Map functions return a slice of KeyValue.
 type KeyValue struct {
@@ -22,44 +23,54 @@ func ihash(key string) int {
 // main/mrworker.go calls this function.
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
-		fmt.Println("We are in Worker")
+		// require more work (ping the worker, do the map reduce)
+		fmt.Println("Starting Worker")
 
-		reply, err := CallAssignTask()
+		worker := WorkerSpec{}
 
+		res, err := CallGetWorkerID()
 		if err != nil {
-			fmt.Println("RPC Failed.")
+			fmt.Println("Worker: GetWorkerID failed.")
+		}
+		worker.wid = res.WorkerID
+		fmt.Println("Worker ID is : ", worker.wid)
+
+		res, err = CallCheckMapStatus()
+		if err != nil {
+			fmt.Println("Worker: CheckMapStatus failed.")
 		}
 
-		if reply.TaskType == MAP {
-			fmt.Println("You are okay, do the rest later")
+		for res.MapStatus == IDLE {
+			time.Sleep(time.Second)
 		}
-		// if reply.TaskType == MAP {
-		// 	fmt.Println("till now we are okay")
-		// }
-		// CallExample()
-
-	// Your worker implementation here.
-
-	// uncomment to send the Example RPC to the coordinator.
-	//callsomething()
 
 }
 
-func CallAssignTask() (Reply, error) {
+func CallGetWorkerID() (RPCResponse, error) {
 
-	args := Args{}
-	reply := Reply{}
+	req := RPCRequest{}
+	res := RPCResponse{}
 
-	args.Type = MAP
-
-	ok := call("Coordinator.AssignTask", &args, &reply)
+	ok := call("Coordinator.GetWorkerID", &req, &res)
 
 	if ok {
-		fmt.Println("This worker called OK and task type is", reply.TaskType)
-		return reply, nil
+		return res, nil
 	} else {
-		fmt.Println("Call failed.")
-		return reply, rpc.ErrShutdown
+		return res, rpc.ErrShutdown
+	}
+}
+
+func CallCheckMapStatus() (RPCResponse, error) {
+
+	req := RPCRequest{}
+	res := RPCResponse{}
+
+	ok := call("Coordinator.CheckMapStatus", &req, &res)
+
+	if ok {
+		return res, nil
+	} else {
+		return res, rpc.ErrShutdown
 	}
 }
 
