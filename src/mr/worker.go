@@ -1,10 +1,13 @@
 package mr
 
-import "fmt"
-import "log"
-import "net/rpc"
-import "hash/fnv"
-import "time"
+import (
+	"fmt"
+	"hash/fnv"
+	"io"
+	"log"
+	"net/rpc"
+	"os"
+)
 
 // Map functions return a slice of KeyValue.
 type KeyValue struct {
@@ -23,26 +26,47 @@ func ihash(key string) int {
 // main/mrworker.go calls this function.
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
-		// require more work (ping the worker, do the map reduce)
-		fmt.Println("Starting Worker")
+	// require more work (ping the worker, do the map reduce)
+	fmt.Println("Starting Worker")
 
-		worker := WorkerSpec{}
+	worker := WorkerSpec{}
 
-		res, err := CallGetWorkerID()
+	res, err := CallGetWorkerID()
+	if err != nil {
+		fmt.Println("Worker: GetWorkerID failed.")
+	}
+	worker.wid = res.WorkerID
+	fmt.Println("Worker ID is : ", worker.wid)
+
+	res, err = CallCheckMapStatus()
+	if err != nil {
+		fmt.Println("Worker: CheckMapStatus failed.")
+	}
+
+	for res.MapStatus == IDLE {
+		mt, err := CallGetMapTask()
 		if err != nil {
-			fmt.Println("Worker: GetWorkerID failed.")
+			fmt.Println("Worker: GetMapTask failed.")
 		}
-		worker.wid = res.WorkerID
-		fmt.Println("Worker ID is : ", worker.wid)
 
-		res, err = CallCheckMapStatus()
+		mt.state = IN_PROGRESS
+
+		intermediate := []KeyValue{}
+		file, err := os.Open(mt.filename)
 		if err != nil {
-			fmt.Println("Worker: CheckMapStatus failed.")
+			log.Fatalf("cannot open %v", mt.filename)
 		}
-
-		for res.MapStatus == IDLE {
-			time.Sleep(time.Second)
+		content, err := io.ReadAll(file)
+		if err != nil {
+			log.Fatalf("cannot read %v", mt.filename)
 		}
+		file.Close()
+		kva := mapf(mt.filename, string(content))
+		intermediate = append(intermediate, kva...)
+		fmt.Println("Till here works, mapf works.")
+		res.MapStatus = DONE
+	}
+	fmt.Println("YOU ARE IN A GOOD PLACE MAN, NAGHME SIAMI")
 
 }
 
@@ -71,6 +95,22 @@ func CallCheckMapStatus() (RPCResponse, error) {
 		return res, nil
 	} else {
 		return res, rpc.ErrShutdown
+	}
+}
+
+func CallGetMapTask() (MapTask, error) {
+	req := RPCRequest{}
+	res := RPCResponse{}
+
+	ok := call("Coordinator.GetMapTask", &req, &res)
+
+	if ok {
+		var mt MapTask
+		mt.wid = res.WorkerID
+		mt.filename = res.TaskInfo
+		return mt, nil
+	} else {
+		return MapTask{}, rpc.ErrShutdown
 	}
 }
 

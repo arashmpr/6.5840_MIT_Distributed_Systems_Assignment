@@ -63,8 +63,6 @@ func (c* Coordinator) GetWorkerID(req *RPCRequest, res *RPCResponse) error {
 }
 
 func (c* Coordinator) GetMapTask(req *RPCRequest, res *RPCResponse) error {
-	// requires more work
-	// not finished and not tested
 	for _, mt := range(c.mts) {
 		if mt.state == IDLE {
 			res.TaskType = MAP
