@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/rpc"
 	"os"
+	"sort"
 )
 
 // Map functions return a slice of KeyValue.
@@ -52,17 +53,14 @@ func Worker(mapf func(string, string) []KeyValue,
 		mt.state = IN_PROGRESS
 
 		intermediate := []KeyValue{}
-		file, err := os.Open(mt.filename)
-		if err != nil {
-			log.Fatalf("cannot open %v", mt.filename)
+		filename, content, err := ProcessFile(mt.filename)
+		if err!=nil {
+			fmt.Println("Worker: ProcessFile failed.")
 		}
-		content, err := io.ReadAll(file)
-		if err != nil {
-			log.Fatalf("cannot read %v", mt.filename)
-		}
-		file.Close()
-		kva := mapf(mt.filename, string(content))
+		kva := mapf(filename, content)
 		intermediate = append(intermediate, kva...)
+		sort.Sort(ByKey(intermediate))
+		DistributeIntermedite(intermediate)
 		fmt.Println("Till here works, mapf works.")
 		res.MapStatus = DONE
 	}
@@ -111,6 +109,36 @@ func CallGetMapTask() (MapTask, error) {
 		return mt, nil
 	} else {
 		return MapTask{}, rpc.ErrShutdown
+	}
+}
+
+func ProcessFile(filename string) (string, string, error) {
+	file, err := os.Open(filename)
+	if err != nil {
+		log.Fatalf("cannot open %v", filename)
+		return "", "", rpc.ErrShutdown
+	}
+	content, err := io.ReadAll(file)
+	if err != nil {
+		log.Fatalf("cannot read %v", filename)
+		return "", "", rpc.ErrShutdown
+	}
+	file.Close()
+	return filename, string(content), nil
+}
+
+func DistributeIntermedite(intermediate []KeyValue) {
+	req := RPCRequest{}
+	res := RPCResponse{}
+
+	req.Intermediate = intermediate
+
+	ok := call("Coordinator.DistributeIntermedite", &req, &res)
+
+	if ok {
+		fmt.Println("Intermediate is distributed.")
+	} else {
+		fmt.Println("SendIntermediateToCoordinator failed.")
 	}
 }
 

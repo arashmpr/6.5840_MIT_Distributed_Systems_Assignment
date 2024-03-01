@@ -15,7 +15,8 @@ import "strconv"
 //
 
 type RPCRequest struct {
-	
+	WorkerID				int			
+	Intermediate	[]KeyValue
 }
 
 type RPCResponse struct {
