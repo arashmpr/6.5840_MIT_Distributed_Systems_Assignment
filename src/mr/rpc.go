@@ -15,15 +15,18 @@ import "strconv"
 //
 
 type RPCRequest struct {
-	WorkerID				int			
+	WorkerID		int			
 	Intermediate	[]KeyValue
+	MapStatus		int
+	ReduceStatus	int
 }
 
 type RPCResponse struct {
-	WorkerID	int
-	TaskType	int
-	TaskInfo	string
-	MapStatus	int
+	WorkerID		int
+	TaskType		int
+	TaskInfo		string
+	MapStatus		int
+	ReduceStatus 	int
 }
 
 // Add your RPC definitions here.

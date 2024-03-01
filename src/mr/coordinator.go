@@ -27,9 +27,9 @@ type MapTask struct {
 }
 
 type ReduceTask struct {
-	wid   int
-	key   string
-	state int
+	wid   		int
+	filename   	string
+	state 		int
 }
 
 type WorkerSpec struct {
@@ -45,7 +45,6 @@ type Coordinator struct {
 	mts         []MapTask
 	rts         []ReduceTask
 	workers     []WorkerSpec
-	intfiles    []string
 	outfile     string
 
 	mapStatus bool
@@ -66,9 +65,15 @@ func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 //
 // the RPC argument and reply types are defined in rpc.go.
 
-func (c *Coordinator) GetWorkerID(req *RPCRequest, res *RPCResponse) error {
-	c.wid_counter++
+func (c *Coordinator) Handshake(req *RPCRequest, res *RPCResponse) error {
+	new_worker := WorkerSpec{}
+	new_worker.wid = c.wid_counter
+	new_worker.state = IDLE
+	c.workers = append(c.workers, new_worker)
+
 	res.WorkerID = c.wid_counter
+
+	c.wid_counter++
 	return nil
 }
 
@@ -77,6 +82,7 @@ func (c *Coordinator) GetMapTask(req *RPCRequest, res *RPCResponse) error {
 		if mt.state == IDLE {
 			res.TaskType = MAP
 			res.TaskInfo = mt.filename
+			mt.state = IN_PROGRESS
 			break
 		}
 	}
@@ -84,12 +90,11 @@ func (c *Coordinator) GetMapTask(req *RPCRequest, res *RPCResponse) error {
 }
 
 func (c *Coordinator) GetReduceTask(req *RPCRequest, res *RPCResponse) error {
-	// requires more work
-	// not finished not tested
 	for _, rt := range c.rts {
 		if rt.state == IDLE {
 			res.TaskType = REDUCE
-			res.TaskInfo = rt.key
+			res.TaskInfo = rt.filename
+			rt.state = IN_PROGRESS
 			break
 		}
 	}
@@ -113,12 +118,50 @@ func (c *Coordinator) CheckMapStatus(req *RPCRequest, res *RPCResponse) error {
 	return nil
 }
 
+func (c *Coordinator) CheckReduceStatus(req *RPCRequest, res *RPCResponse) error {
+	for _, rt := range c.rts {
+		if rt.state == IDLE {
+			res.ReduceStatus = IDLE
+			return nil
+		}
+		if rt.state == IN_PROGRESS {
+			res.ReduceStatus = IN_PROGRESS
+		}
+	}
+	if res.ReduceStatus == IN_PROGRESS {
+		return nil
+	}
+	res.ReduceStatus = DONE
+	return nil
+}
+
+func (c *Coordinator) SetMapStatus(req *RPCRequest, res *RPCResponse) error {
+	wid := res.WorkerID
+	mt_status := res.MapStatus
+	for _, mt := range c.mts {
+		if mt.wid == wid {
+			mt.state = mt_status
+		}
+	}
+	return nil
+}
+
+func (c *Coordinator) FreeWorker(req *RPCRequest, res *RPCResponse) error {
+	wid := res.WorkerID
+	for _, worker := range c.workers {
+		if wid == worker.wid {
+			worker.wid = IDLE
+		}
+	}
+	return nil
+}
+
 func (c *Coordinator) WriteToIntermediatePaths(intermediate_paths [][]KeyValue) error {
 	for idx, _ := range intermediate_paths {
 		if len(intermediate_paths[idx]) == 0 {
 			continue
 		}
-		intfilename := "intermediate_" + strconv.Itoa(idx)
+		intfilename := "intermediate_" + strconv.Itoa(idx) + ".json"
 		data, err := json.Marshal(intermediate_paths[idx])
 		if err != nil {
 			fmt.Println("Coordinator::WriteToIntermediatePaths: Error serializing data:", err)
@@ -148,15 +191,18 @@ func (c *Coordinator) DistributeIntermedite(req *RPCRequest, res *RPCResponse) e
 	return nil
 }
 
-func (c *Coordinator) CreateIntermediateFiles(nReduce int) []string {
-	var intfiles []string
+func (c *Coordinator) CreateReduceTasks(nReduce int) []ReduceTask {
+	var rts []ReduceTask
 	for i := 0; i < nReduce; i++ {
-		intfile := "intermediate_" + strconv.Itoa(i)
-		file, _ := os.Create(intfile)
+		rt := ReduceTask{}
+		rt.wid = -1
+		rt.filename = "intermediate_" + strconv.Itoa(i) + ".json"
+		rt.state = IDLE
+		file, _ := os.Create(rt.filename)
 		file.Close()
-		intfiles = append(intfiles, intfile)
+		rts = append(rts, rt)
 	}
-	return intfiles
+	return rts
 }
 
 func (c *Coordinator) CreateOutputFile() string {
@@ -203,7 +249,6 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	fmt.Println("We are in the MakeCoordinator function.")
 	c := Coordinator{}
 	var mts []MapTask
-	var rts []ReduceTask
 
 	var mt MapTask
 
@@ -214,14 +259,12 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 
 		mts = append(mts, mt)
 	}
-	intfiles := c.CreateIntermediateFiles(nReduce)
 	outfile := c.CreateOutputFile()
 
 	c.wid_counter = 0
 	c.nReduce = nReduce
 	c.mts = mts
-	c.rts = rts
-	c.intfiles = intfiles
+	c.rts = c.CreateReduceTasks(nReduce)
 	c.outfile = outfile
 
 	c.server()
