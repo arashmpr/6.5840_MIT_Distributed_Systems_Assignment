@@ -1,6 +1,7 @@
 package mr
 
 import (
+	"encoding/json"
 	"fmt"
 	"hash/fnv"
 	"io"
@@ -8,8 +9,7 @@ import (
 	"net/rpc"
 	"os"
 	"sort"
-	"time"
-	"encoding/json"
+	"strconv"
 )
 
 // Map functions return a slice of KeyValue.
@@ -30,111 +30,79 @@ func ihash(key string) int {
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 	// require more work (ping the worker, do the reduce)
-	fmt.Println("Starting Worker")
-
-	worker := WorkerSpec{}
 
 	res, err := CallHandshake()
 	if err != nil {
 		fmt.Println("Worker: Handshake failed.")
 	}
-	worker.wid = res.WorkerID
-	fmt.Println("Worker ID is : ", worker.wid)
+	wid := res.WorkerID
 
-	res, err = CallCheckMapStatus()
+	res, _ = CallGetTask(wid)
+
+	for res.TaskType != NO_JOB {
+		if res.TaskType == MAP {
+			mt := MapTask{}
+			mt.wid = wid
+			mt.filename = res.TaskInfo
+			mt.state = IN_PROGRESS
+			// fmt.Println("Executing map")
+			ExecuteMap(mt, mapf)
+		}
+
+		if res.TaskType == REDUCE {
+			rt := ReduceTask{}
+			rt.wid = wid
+			rt.filename = res.TaskInfo
+			rt.state = IN_PROGRESS
+			rt.no = res.ReduceNo
+			ExecuteReduce(rt, reducef)
+		}
+		res, _ = CallGetTask(wid)
+	}
+}
+
+func ExecuteMap(mt MapTask, mapf func(string, string) []KeyValue) {
+	intermediate := []KeyValue{}
+	filename, content, err := ProcessFile(mt.filename)
 	if err != nil {
-		fmt.Println("Worker: CheckMapStatus failed.")
+		fmt.Println("Worker::ExecuteMap: ProcessFile failed.")
 	}
+	kva := mapf(filename, content)
+	mt.state = DONE
 
-	for res.MapStatus != DONE {
-		fmt.Println("From the top")
-		if res.MapStatus == IN_PROGRESS {
-			time.Sleep(time.Second)
-			continue
-		}
-		mt, err := CallGetMapTask()
-		if err != nil {
-			fmt.Println("Worker: GetMapTask failed.")
-		}
-
-		mt.state = IN_PROGRESS
-
-		intermediate := []KeyValue{}
-		filename, content, err := ProcessFile(mt.filename)
-		if err != nil {
-			fmt.Println("Worker: ProcessFile failed.")
-		}
-		kva := mapf(filename, content)
-		mt.state = DONE
-
-		err = CallSetMapStatus(worker.wid, DONE)
-		if err != nil {
-			fmt.Println("Worker: SetMapStatus failed.")
-		}
-
-		//intermediate starts
-		intermediate = append(intermediate, kva...)
-		sort.Sort(ByKey(intermediate))
-		DistributeIntermedite(intermediate)
-
-		fmt.Println("Worker: Map part is done.")
-
-		res, err = CallCheckMapStatus()
-		if err != nil {
-			fmt.Println("Worker: CheckMapStatus failed.")
-		}
-		break
-	}
-
-	//free the worker
-
-	err = CallFreeWorker(worker.wid)
+	err = CallSetMapStatus(mt.wid, DONE)
 	if err != nil {
-		fmt.Println("Worker::FreeWorker: failed.")
+		fmt.Println("Worker:ExecuteMap: SetMapStatus failed.")
 	}
 
-	// start reduce part
-	res, err = CallCheckReduceStatus()
-	if err != nil {
-		fmt.Println("Worker: CheckReduceStatus failed.")
+	intermediate = append(intermediate, kva...)
+	sort.Sort(ByKey(intermediate))
+	DistributeIntermedite(intermediate)
+}
+
+func ExecuteReduce(rt ReduceTask, reducef func(string, []string) string) {
+	kvs := ConvertTaskContent(rt.filename)
+
+	oname := "mr-out-" + strconv.Itoa(rt.no)
+	ofile, _ := os.Create(oname)
+
+	i := 0
+	for i < len(kvs) {
+		j := i + 1
+		for j < len(kvs) && kvs[j].Key == kvs[i].Key {
+			j++
+		}
+		values := []string{}
+		for k := i; k < j; k++ {
+			values = append(values, kvs[k].Value)
+		}
+		output := reducef(kvs[i].Key, values)
+
+		fmt.Fprintf(ofile, "%v %v\n", kvs[i].Key, output)
+		i = j
 	}
 
-	for res.ReduceStatus != DONE {
-		fmt.Println("From the top in Reduce")
-		if res.ReduceStatus == IN_PROGRESS {
-			time.Sleep(time.Second)
-			continue
-		}
-		rt, err := CallGetReduceTask()
-		if err != nil {
-			fmt.Println("Worker: GetReduceTask failed.")
-		}
-		fmt.Println("My Reduce task is ", rt.filename)
-
-		kvs := ConvertTaskContent(rt.filename)
-
-		oname := "mr-out"
-		ofile, _ := os.Create(oname)
-
-		i := 0
-		for i < len(kvs) {
-			j := i + 1
-			for j < len(kvs) && kvs[j].Key == kvs[i].Key {
-				j++
-			}
-			values := []string{}
-			for k := i; k < j; k++ {
-				values = append(values, kvs[k].Value)
-			}
-			output := reducef(kvs[i].Key, values)
-	
-			fmt.Fprintf(ofile, "%v %v\n", kvs[i].Key, output)
-			i = j
-		}
-
-		
-		fmt.Println("Till here works")
-	}
+	CallSetReduceStatus(rt.wid, DONE)
 }
 
 func CallHandshake() (RPCResponse, error) {
@@ -151,63 +119,18 @@ func CallHandshake() (RPCResponse, error) {
 	}
 }
 
-func CallCheckMapStatus() (RPCResponse, error) {
-
+func CallGetTask(wid int) (RPCResponse, error) {
 	req := RPCRequest{}
 	res := RPCResponse{}
 
-	ok := call("Coordinator.CheckMapStatus", &req, &res)
+	req.WorkerID = wid
+
+	ok := call("Coordinator.GetTask", &req, &res)
 
 	if ok {
 		return res, nil
 	} else {
 		return res, rpc.ErrShutdown
-	}
-}
-
-func CallCheckReduceStatus() (RPCResponse, error) {
-
-	req := RPCRequest{}
-	res := RPCResponse{}
-
-	ok := call("Coordinator.CheckReduceStatus", &req, &res)
-
-	if ok {
-		return res, nil
-	} else {
-		return res, rpc.ErrShutdown
-	}
-}
-
-func CallGetMapTask() (MapTask, error) {
-	req := RPCRequest{}
-	res := RPCResponse{}
-
-	ok := call("Coordinator.GetMapTask", &req, &res)
-
-	if ok {
-		var mt MapTask
-		mt.wid = res.WorkerID
-		mt.filename = res.TaskInfo
-		return mt, nil
-	} else {
-		return MapTask{}, rpc.ErrShutdown
-	}
-}
-
-func CallGetReduceTask() (ReduceTask, error) {
-	req := RPCRequest{}
-	res := RPCResponse{}
-
-	ok := call("Coordinator.GetReduceTask", &req, &res)
-
-	if ok {
-		var rt ReduceTask
-		rt.wid = res.WorkerID
-		rt.filename = res.TaskInfo
-		return rt, nil
-	} else {
-		return ReduceTask{}, rpc.ErrShutdown
 	}
 }
 
@@ -221,7 +144,22 @@ func CallSetMapStatus(wid, status int) error {
 	ok := call("Coordinator.SetMapStatus", &req, &res)
 
 	if ok {
-		fmt.Println("Worker::CallSetMapStatus: Map Status is Done.")
+		return nil
+	} else {
+		return rpc.ErrShutdown
+	}
+}
+
+func CallSetReduceStatus(wid, status int) error {
+	req := RPCRequest{}
+	res := RPCResponse{}
+
+	req.WorkerID = wid
+	req.ReduceStatus = status
+
+	ok := call("Coordinator.SetReduceStatus", &req, &res)
+
+	if ok {
 		return nil
 	} else {
 		return rpc.ErrShutdown
@@ -237,7 +175,6 @@ func CallFreeWorker(wid int) error {
 	ok := call("Coordinator.FreeWorker", &req, &res)
 
 	if ok {
-		fmt.Println("Worker::CallSetMapStatus: Worker is free.")
 		return nil
 	} else {
 		return rpc.ErrShutdown
@@ -269,7 +206,7 @@ func DistributeIntermedite(intermediate []KeyValue) {
 	ok := call("Coordinator.DistributeIntermedite", &req, &res)
 
 	if ok {
-		fmt.Println("Intermediate is distributed.")
+
 	} else {
 		fmt.Println("SendIntermediateToCoordinator failed.")
 	}
@@ -283,23 +220,38 @@ func ConvertTaskContent(filenamen string) []KeyValue {
 	}
 	defer file.Close()
 
-	// Read the JSON data from the file
-    jsonData, err := io.ReadAll(file)
-    if err != nil {
-        fmt.Println("Error reading file:", err)
-    }
+	var kvs []KeyValue
 
-    // Check if JSON data is empty
-    if len(jsonData) == 0 {
-        fmt.Println("Error: JSON data is empty")
-    }
+	dec := json.NewDecoder(file)
+	for {
+		var kv KeyValue
+		if err := dec.Decode(&kv); err != nil {
+			break
+		}
+		kvs = append(kvs, kv)
+	}
 
-    // Unmarshal the JSON data into a slice of KeyValue structs
-    var kvs []KeyValue
-    if err := json.Unmarshal(jsonData, &kvs); err != nil {
-        fmt.Println("Error unmarshalling JSON:", err)
-    }
+	sort.Sort(ByKey(kvs))
+
 	return kvs
+
+	// // Read the JSON data from the file
+	// jsonData, err := io.ReadAll(file)
+	// if err != nil {
+	// 	fmt.Println("Error reading file:", err)
+	// }
+
+	// // Check if JSON data is empty
+	// if len(jsonData) == 0 {
+	// 	fmt.Println("Error: JSON data is empty")
+	// }
+
+	// // Unmarshal the JSON data into a slice of KeyValue structs
+	// var kvs []KeyValue
+	// if err := json.Unmarshal(jsonData, &kvs); err != nil {
+	// 	fmt.Println("Error unmarshalling JSON:", err)
+	// }
+	// return kvs
 }
 
 // example function to show how to make an RPC call to the coordinator.

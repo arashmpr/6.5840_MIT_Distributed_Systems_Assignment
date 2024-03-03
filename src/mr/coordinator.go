@@ -9,6 +9,7 @@ import (
 	"net/rpc"
 	"os"
 	"strconv"
+	"time"
 )
 
 const (
@@ -18,6 +19,7 @@ const (
 	_
 	MAP
 	REDUCE
+	NO_JOB
 )
 
 type MapTask struct {
@@ -27,16 +29,15 @@ type MapTask struct {
 }
 
 type ReduceTask struct {
-	wid   		int
-	filename   	string
-	state 		int
+	wid      	int
+	filename 	string
+	state    	int
+	no			int
 }
 
 type WorkerSpec struct {
 	wid      int
-	taskType int
 	state    int
-	taskInfo string // if taskType == MAP -> taskInfo = filename else taskInfo = key
 }
 
 type Coordinator struct {
@@ -45,10 +46,10 @@ type Coordinator struct {
 	mts         []MapTask
 	rts         []ReduceTask
 	workers     []WorkerSpec
-	outfile     string
 
-	mapStatus bool
-	isDone    bool
+	map_status    int
+	reduce_status int
+	is_done       bool
 }
 
 // for sorting by key.
@@ -77,70 +78,133 @@ func (c *Coordinator) Handshake(req *RPCRequest, res *RPCResponse) error {
 	return nil
 }
 
-func (c *Coordinator) GetMapTask(req *RPCRequest, res *RPCResponse) error {
-	for _, mt := range c.mts {
-		if mt.state == IDLE {
-			res.TaskType = MAP
-			res.TaskInfo = mt.filename
-			mt.state = IN_PROGRESS
-			break
+func (c *Coordinator) GetTask(req *RPCRequest, res *RPCResponse) error {
+	c.UpdateMapStatus()
+	for c.map_status != DONE {
+		switch c.map_status {
+		case IN_PROGRESS:
+			time.Sleep(10 * time.Millisecond)
+			c.UpdateMapStatus()
+		case IDLE:
+			for i, mt := range c.mts {
+				if mt.state == IDLE {
+					c.mts[i].wid = req.WorkerID
+					c.mts[i].state = IN_PROGRESS
+
+					res.TaskType = MAP
+					res.TaskInfo = mt.filename
+					return nil
+				}
+			}
 		}
 	}
+
+	c.UpdateReduceStatus()
+	for c.reduce_status != DONE {
+		switch c.reduce_status {
+		case IN_PROGRESS:
+			time.Sleep(10 * time.Millisecond)
+			c.UpdateReduceStatus()
+		case IDLE:
+			for i, rt := range c.rts {
+				if rt.state == IDLE {
+					c.rts[i].wid = req.WorkerID
+					c.rts[i].state = IN_PROGRESS
+
+					res.TaskType = REDUCE
+					res.TaskInfo = rt.filename
+					res.ReduceNo = rt.no
+					return nil
+				}
+			}
+		}
+	}
+
+	res.TaskType = NO_JOB
+	c.is_done = true
 	return nil
 }
 
-func (c *Coordinator) GetReduceTask(req *RPCRequest, res *RPCResponse) error {
-	for _, rt := range c.rts {
-		if rt.state == IDLE {
-			res.TaskType = REDUCE
-			res.TaskInfo = rt.filename
-			rt.state = IN_PROGRESS
-			break
-		}
-	}
-	return nil
-}
-
-func (c *Coordinator) CheckMapStatus(req *RPCRequest, res *RPCResponse) error {
+func (c *Coordinator) UpdateMapStatus() {
+	map_status := -1
 	for _, mt := range c.mts {
 		if mt.state == IDLE {
-			res.MapStatus = IDLE
-			return nil
+			map_status = IDLE
+			c.map_status = map_status
+			return
 		}
 		if mt.state == IN_PROGRESS {
-			res.MapStatus = IN_PROGRESS
+			map_status = IN_PROGRESS
 		}
 	}
-	if res.MapStatus == IN_PROGRESS {
-		return nil
+	if map_status == -1 {
+		map_status = DONE
+	} else {
+		map_status = IN_PROGRESS
 	}
-	res.MapStatus = DONE
-	return nil
+	c.map_status = map_status
 }
 
-func (c *Coordinator) CheckReduceStatus(req *RPCRequest, res *RPCResponse) error {
+func (c *Coordinator) PrintStatus() {
+	fmt.Println()
+	fmt.Println()
+
+	fmt.Println("MAP STATUS")
+	fmt.Println("----------------------------------------")
+	fmt.Println("idx\twid\tstate")
+	for idx, mt := range c.mts {
+		fmt.Printf("%d\t%d\t%d\n", idx, mt.wid, mt.state)
+	}
+
+	fmt.Println()
+	fmt.Println()
+
+	fmt.Println("REDUCE STATUS")
+	fmt.Println("----------------------------------------")
+	fmt.Println("idx\twid\tstate")
+	for idx, rt := range c.rts {
+		fmt.Printf("%d\t%d\t%d\n", idx, rt.wid, rt.state)
+	}
+}
+
+func (c *Coordinator) UpdateReduceStatus() {
+	reduce_status := -1
 	for _, rt := range c.rts {
 		if rt.state == IDLE {
-			res.ReduceStatus = IDLE
-			return nil
+			c.reduce_status = IDLE
+			return
 		}
 		if rt.state == IN_PROGRESS {
-			res.ReduceStatus = IN_PROGRESS
+			reduce_status = IN_PROGRESS
 		}
 	}
-	if res.ReduceStatus == IN_PROGRESS {
-		return nil
+	if reduce_status == -1 {
+		reduce_status = DONE
+	} else {
+		reduce_status = IN_PROGRESS
 	}
-	res.ReduceStatus = DONE
-	return nil
+	c.reduce_status = reduce_status
 }
 
 func (c *Coordinator) SetMapStatus(req *RPCRequest, res *RPCResponse) error {
-	wid := res.WorkerID
-	mt_status := res.MapStatus
-	for _, mt := range c.mts {
+	wid := req.WorkerID
+	mt_status := req.MapStatus
+
+	for i, mt := range c.mts {
 		if mt.wid == wid {
-			mt.state = mt_status
+			c.mts[i].state = mt_status
+		}
+	}
+	return nil
+}
+
+func (c *Coordinator) SetReduceStatus(req *RPCRequest, res *RPCResponse) error {
+	wid := req.WorkerID
+	rt_status := req.ReduceStatus
+
+	for i, rt := range c.rts {
+		if rt.wid == wid {
+			c.rts[i].state = rt_status
 		}
 	}
 	return nil
@@ -156,28 +220,26 @@ func (c *Coordinator) FreeWorker(req *RPCRequest, res *RPCResponse) error {
 	return nil
 }
 
-func (c *Coordinator) WriteToIntermediatePaths(intermediate_paths [][]KeyValue) error {
-	for idx, _ := range intermediate_paths {
-		if len(intermediate_paths[idx]) == 0 {
-			continue
-		}
-		intfilename := "intermediate_" + strconv.Itoa(idx) + ".json"
-		data, err := json.Marshal(intermediate_paths[idx])
-		if err != nil {
-			fmt.Println("Coordinator::WriteToIntermediatePaths: Error serializing data:", err)
-			return err
-		}
-		err = os.WriteFile(intfilename, data, 0644)
-		if err != nil {
-			fmt.Println("Coordinator::WriteToIntermediatePaths: Error writing file:", err)
-			return err
-		}
+func (c *Coordinator) WriteToIntermediatePaths(intermediatePaths [][]KeyValue) error {
+    for idx, _ := range intermediatePaths {
+        if len(intermediatePaths[idx]) == 0 {
+            continue
+        }
+        intFilename := "intermediate_" + strconv.Itoa(idx) + ".json"
 
-		fmt.Printf("Data written successfully to '%s'\n", intfilename)
+        file, err := os.OpenFile(intFilename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+        if err != nil {
+            fmt.Println("Coordinator::WriteToIntermediatePaths: Error opening file:", err)
+            return err
+        }
+        defer file.Close()
+		enc := json.NewEncoder(file)
+  			for _, kv := range(intermediatePaths[idx]) {
+    			enc.Encode(&kv)
+			}
+		}
+		return nil
 	}
-	fmt.Println("All data written succcessfully")
-	return nil
-}
 
 func (c *Coordinator) DistributeIntermedite(req *RPCRequest, res *RPCResponse) error {
 	intermediate := req.Intermediate
@@ -191,6 +253,22 @@ func (c *Coordinator) DistributeIntermedite(req *RPCRequest, res *RPCResponse) e
 	return nil
 }
 
+func (c *Coordinator) CreateMapTasks(files []string) []MapTask {
+	var mts []MapTask
+
+	var mt MapTask
+
+	for _, filename := range files {
+		mt.filename = filename
+		mt.wid = -1
+		mt.state = IDLE
+
+		mts = append(mts, mt)
+	}
+
+	return mts
+}
+
 func (c *Coordinator) CreateReduceTasks(nReduce int) []ReduceTask {
 	var rts []ReduceTask
 	for i := 0; i < nReduce; i++ {
@@ -198,18 +276,12 @@ func (c *Coordinator) CreateReduceTasks(nReduce int) []ReduceTask {
 		rt.wid = -1
 		rt.filename = "intermediate_" + strconv.Itoa(i) + ".json"
 		rt.state = IDLE
+		rt.no = i
 		file, _ := os.Create(rt.filename)
 		file.Close()
 		rts = append(rts, rt)
 	}
 	return rts
-}
-
-func (c *Coordinator) CreateOutputFile() string {
-	filename := "mr-out"
-	file, _ := os.Create(filename)
-	file.Close()
-	return filename
 }
 
 // start a thread that listens for RPCs from worker.go
@@ -229,14 +301,10 @@ func (c *Coordinator) server() {
 // main/mrcoordinator.go calls Done() periodically to find out
 // if the entire job has finished.
 func (c *Coordinator) Done() bool {
-	// requires more work
-	fmt.Println("Check if master work is done...")
 	ret := false
 
-	for _, rt := range c.rts {
-		if rt.state != DONE {
-			return false
-		}
+	if c.is_done {
+		return true
 	}
 	return ret
 }
@@ -245,27 +313,19 @@ func (c *Coordinator) Done() bool {
 // main/mrcoordinator.go calls this function.
 // nReduce is the number of reduce tasks to use.
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
-	//requires more work
-	fmt.Println("We are in the MakeCoordinator function.")
 	c := Coordinator{}
-	var mts []MapTask
 
-	var mt MapTask
-
-	for _, filename := range files {
-		mt.filename = filename
-		mt.wid = -1
-		mt.state = IDLE
-
-		mts = append(mts, mt)
-	}
-	outfile := c.CreateOutputFile()
+	mts := c.CreateMapTasks(files)
+	rts := c.CreateReduceTasks(nReduce)
 
 	c.wid_counter = 0
 	c.nReduce = nReduce
 	c.mts = mts
-	c.rts = c.CreateReduceTasks(nReduce)
-	c.outfile = outfile
+	c.rts = rts
+
+	c.map_status = IDLE
+	c.reduce_status = IDLE
+	c.is_done = false
 
 	c.server()
 	return &c

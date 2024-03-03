@@ -27,6 +27,7 @@ type RPCResponse struct {
 	TaskInfo		string
 	MapStatus		int
 	ReduceStatus 	int
+	ReduceNo		int
 }
 
 // Add your RPC definitions here.
