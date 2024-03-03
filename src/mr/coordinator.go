@@ -26,14 +26,14 @@ type MapTask struct {
 	wid      int
 	filename string
 	state    int
-}
+	}
 
 type ReduceTask struct {
 	wid      	int
 	filename 	string
 	state    	int
 	no			int
-}
+	}
 
 type WorkerSpec struct {
 	wid      int
@@ -221,25 +221,25 @@ func (c *Coordinator) FreeWorker(req *RPCRequest, res *RPCResponse) error {
 }
 
 func (c *Coordinator) WriteToIntermediatePaths(intermediatePaths [][]KeyValue) error {
-    for idx, _ := range intermediatePaths {
-        if len(intermediatePaths[idx]) == 0 {
-            continue
-        }
-        intFilename := "intermediate_" + strconv.Itoa(idx) + ".json"
-
-        file, err := os.OpenFile(intFilename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-        if err != nil {
-            fmt.Println("Coordinator::WriteToIntermediatePaths: Error opening file:", err)
-            return err
-        }
-        defer file.Close()
-		enc := json.NewEncoder(file)
-  			for _, kv := range(intermediatePaths[idx]) {
-    			enc.Encode(&kv)
-			}
+	for idx, _ := range intermediatePaths {
+		if len(intermediatePaths[idx]) == 0 {
+			continue
 		}
-		return nil
+		intFilename := "intermediate_" + strconv.Itoa(idx) + ".json"
+
+		file, err := os.OpenFile(intFilename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			fmt.Println("Coordinator::WriteToIntermediatePaths: Error opening file:", err)
+			return err
+		}
+		defer file.Close()
+		enc := json.NewEncoder(file)
+		for _, kv := range intermediatePaths[idx] {
+			enc.Encode(&kv)
+		}
 	}
+	return nil
+}
 
 func (c *Coordinator) DistributeIntermedite(req *RPCRequest, res *RPCResponse) error {
 	intermediate := req.Intermediate
@@ -282,6 +282,15 @@ func (c *Coordinator) CreateReduceTasks(nReduce int) []ReduceTask {
 		rts = append(rts, rt)
 	}
 	return rts
+}
+
+func (c *Coordinator) isWokerAlive() {
+	ticker := time.NewTicker(3 * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		fmt.Println("Signal the worker")
+	}
 }
 
 // start a thread that listens for RPCs from worker.go
@@ -328,5 +337,7 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c.is_done = false
 
 	c.server()
+	go c.isWokerAlive()
+
 	return &c
 }
