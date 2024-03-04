@@ -23,9 +23,10 @@ const (
 )
 
 type MapTask struct {
-	wid      int
-	filename string
-	state    int
+	wid      	int
+	filename 	string
+	state    	int
+	start_time	time.Time
 	}
 
 type ReduceTask struct {
@@ -33,6 +34,7 @@ type ReduceTask struct {
 	filename 	string
 	state    	int
 	no			int
+	start_time	time.Time
 	}
 
 type WorkerSpec struct {
@@ -79,7 +81,9 @@ func (c *Coordinator) Handshake(req *RPCRequest, res *RPCResponse) error {
 }
 
 func (c *Coordinator) GetTask(req *RPCRequest, res *RPCResponse) error {
+	// time.Sleep(200*time.Millisecond)
 	c.UpdateMapStatus()
+	// c.PrintStatus()
 	for c.map_status != DONE {
 		switch c.map_status {
 		case IN_PROGRESS:
@@ -90,6 +94,7 @@ func (c *Coordinator) GetTask(req *RPCRequest, res *RPCResponse) error {
 				if mt.state == IDLE {
 					c.mts[i].wid = req.WorkerID
 					c.mts[i].state = IN_PROGRESS
+					c.mts[i].start_time = time.Now()
 
 					res.TaskType = MAP
 					res.TaskInfo = mt.filename
@@ -110,6 +115,7 @@ func (c *Coordinator) GetTask(req *RPCRequest, res *RPCResponse) error {
 				if rt.state == IDLE {
 					c.rts[i].wid = req.WorkerID
 					c.rts[i].state = IN_PROGRESS
+					c.rts[i].start_time = time.Now()
 
 					res.TaskType = REDUCE
 					res.TaskInfo = rt.filename
@@ -262,6 +268,7 @@ func (c *Coordinator) CreateMapTasks(files []string) []MapTask {
 		mt.filename = filename
 		mt.wid = -1
 		mt.state = IDLE
+		mt.start_time = time.Now()
 
 		mts = append(mts, mt)
 	}
@@ -277,6 +284,7 @@ func (c *Coordinator) CreateReduceTasks(nReduce int) []ReduceTask {
 		rt.filename = "intermediate_" + strconv.Itoa(i) + ".json"
 		rt.state = IDLE
 		rt.no = i
+		rt.start_time = time.Now()
 		file, _ := os.Create(rt.filename)
 		file.Close()
 		rts = append(rts, rt)
@@ -284,12 +292,36 @@ func (c *Coordinator) CreateReduceTasks(nReduce int) []ReduceTask {
 	return rts
 }
 
-func (c *Coordinator) isWokerAlive() {
-	ticker := time.NewTicker(3 * time.Second)
-	defer ticker.Stop()
+func (c *Coordinator) RebuildFile(filename string) {
+	os.Remove(filename)
+}
 
-	for range ticker.C {
-		fmt.Println("Signal the worker")
+func (c *Coordinator) isWokerAlive() {
+	duration := 10.0
+	for {
+		// if c.map_status != DONE {
+		// 	for i, mt := range c.mts {
+		// 		start := mt.start_time
+		// 		elapsed := time.Since(start).Seconds()
+		// 		if mt.state == IN_PROGRESS && elapsed > duration {
+		// 			fmt.Println("Elapsed time is: ", elapsed)
+		// 			c.mts[i].wid = -1
+		// 			c.mts[i].state = IDLE
+		// 			c.RebuildFile(mt.filename, MAP)
+		// 		}
+		// 	}
+		// }
+
+		for i, rt := range c.rts {
+			start := rt.start_time
+			elapsed := time.Since(start).Seconds()
+			if rt.state == IN_PROGRESS && elapsed > duration {
+				fmt.Println("Elapsed time is: ", elapsed)
+				c.rts[i].wid = -1
+				c.rts[i].state = IDLE
+				c.RebuildFile("mr-out-" + strconv.Itoa(rt.no))
+			}
+		}
 	}
 }
 

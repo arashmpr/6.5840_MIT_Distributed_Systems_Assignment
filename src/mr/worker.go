@@ -10,6 +10,7 @@ import (
 	"os"
 	"sort"
 	"strconv"
+	// "time"
 )
 
 // Map functions return a slice of KeyValue.
@@ -69,6 +70,8 @@ func ExecuteMap(mt MapTask, mapf func(string, string) []KeyValue) {
 	}
 	kva := mapf(filename, content)
 	mt.state = DONE
+
+	// time.Sleep(800*time.Millisecond)
 
 	err = CallSetMapStatus(mt.wid, DONE)
 	if err != nil {
